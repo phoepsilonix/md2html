@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'commit-*'
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    env:
+      SCCACHE_CACHE_SIZE: 1G
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+      SCCACHE_DIR: /home/runner/.cache/sccache
+      # SCCACHE_RECACHE: 1 # Uncomment this to clear cache, then comment
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          path: md2html
+      - name: Setup variables
+        id: variables
+        run: |
+           VER=${GITHUB_REF##*/}
+           VER=${VER#commit-}
+           VER=${VER%-release}
+           echo "version=${VER}" >> $GITHUB_OUTPUT
+      - name: clone pulldown-cmark
+        run: |
+          git clone --depth 1 https://github.com/pulldown-cmark/pulldown-cmark.git
+          cd pulldown-cmark
+          git fetch --prune --unshallow --tags --no-recurse-submodules --filter=tree:0
+      - name: checkout tag
+        run: |
+          TAG=${GITHUB_REF##*/}
+          cd pulldown-cmark
+          COMMIT=$(git log -1 ${TAG#commit-} --pretty=%h)
+          if [[ "$TAG" =~ ^commit- ]]; then
+            cd ../md2html
+            echo $TAG
+            git tag $TAG -d
+            git push origin $TAG -d
+            cd ../pulldown-cmark
+            base_tag=$(git describe --tags --abbrev=0 --always ${COMMIT})
+            echo $base_tag
+            base_tag=${base_tag/+*/}
+            echo $base_tag
+            COUNT=$(($(git rev-list --count $COMMIT)-$(git rev-list --count $base_tag)))
+            if [[ $COUNT != 0 ]];then
+              TAG=$base_tag-$COUNT-g$COMMIT
+            else
+              TAG=$base_tag
+            fi
+            echo "tag_name=" $TAG
+            echo $TAG
+            echo "tag_name=${TAG}" >> $GITHUB_OUTPUT
+            echo "tag_commit=$(git log -1 --pretty=%H $TAG)" >> $GITHUB_OUTPUT
+          else
+            echo "tag_name=$(git describe --tags --always $TAG)" >> $GITHUB_OUTPUT
+            echo "tag_commit=$(git log -1 --pretty=%H $TAG)" >> $GITHUB_OUTPUT
+          fi
+          cd ../md2html
+          echo $TAG | sed -e 's/-g.*$//g' -e 's/-/+/g' > version.txt
+          cat version.txt
+      - name: Generate release tag
+        id: release_tag
+        run: |
+          echo "release_tag=$(cat md2html/version.txt)" >> $GITHUB_OUTPUT
+      - name: Generate release note
+        id: release_note
+        run: |
+          {
+          echo "release_note<<EOF"
+          echo "$(cd pulldown-cmark && git log --pretty=format:"%C(yellow)commit %H%C(auto)%d%nAuthor: %an%nDate:   %ad%n%n%s%n%n%b" -1 ${{ steps.variables.outputs.version }})"
+          echo "EOF"
+          } >> $GITHUB_OUTPUT
+      - name: test
+        run: |
+          echo "1: ${{ steps.release_tag.outputs.release_tag }}"
+          echo "2: ${{ steps.release_note.outputs.release_note }}"
+      - name: install zig and tools (Linux)
+        run: |
+          #pacman -Sy sudo rustup clang llvm lld make git --noconfirm
+          sudo apt-get install build-essential make git clang binutils-mingw-w64 wget
+          rm -f ~/.cargo/config*
+          mkdir -p zig
+          curl -LZ https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz|tar xJ --strip-component=1 -C zig
+          sudo mv zig /usr/local/
+          echo "/usr/local/zig" >> $GITHUB_PATH
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.4
+        with:
+          version: "v0.7.7"
+      - name: Install mold linker
+        uses: rui314/setup-mold@staging
+        with:
+          mold-version: 2.30.0
+          make-default: true
+      - name: Cache toolchain
+        uses: Swatinem/rust-cache@v2
+      - name: Update toolchain
+        run: |
+          rm -f ~/.cargo/bin/rust-analyzer
+          rm -f ~/.cargo/bin/rustfmt
+          rm -f ~/.cargo/bin/cargo-fmt
+          rustup update nightly
+          rustup default nightly
+          rustup component add rust-src
+          rustup target add $(cat md2html/target.txt)
+          rustup +stable target add $(cat md2html/target.txt)
+      - name: Install cargo-zigbuild
+        run: |
+          cargo install cargo-zigbuild --target x86_64-unknown-linux-gnu
+      - name: config.toml
+        run: |
+          mkdir -p ~/.cargo/
+          rm -f ~/.cargo/config*
+          cp md2html/config.toml ~/.cargo/config.toml
+      - name: Build and archive
+        shell: bash
+        run: |
+          cd md2html
+          make target-archive
+      - name: Create release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: "${{ steps.release_tag.outputs.release_tag }}"
+          name: "${{ steps.release_tag.outputs.release_tag }}"
+          artifacts: 'md2html/release/*'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: "${{ steps.release_note.outputs.release_note }}"
+
