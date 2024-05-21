@@ -1,5 +1,9 @@
 name: Release
 
+# Releasesへのファイル追加のために書き込み権限が必要
+permissions:
+  contents: write
+
 on:
   push:
     tags:
@@ -7,37 +11,61 @@ on:
       - 'commit-*'
 
 jobs:
-  release:
-    name: Release
-    runs-on: ubuntu-latest
+  build:
+    name: Release binary
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: md2html-x86_64-linux.tar.xz
+            asset_name: md2html-x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact_name: md2html-aarch64-linux.tar.xz
+            asset_name: md2html-aarch64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            artifact_name: md2html-x86_64-windows.tar.xz
+            asset_name: md2html-x86_64-pc-windows-gnu
+          - os: ubuntu-latest
+            target: x86_64-apple-darwin
+            artifact_name: md2html-x86_64-windows.tar.xz
+            asset_name: md2html-x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: aarch64-apple-darwin
+            artifact_name: md2html-aarch64-apple-darwin.tar.xz
+            asset_name: md2html-aarch64-apple-darwin
+
+
+    runs-on: ${{ matrix.os }}
     env:
       SCCACHE_CACHE_SIZE: 1G
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
       SCCACHE_DIR: /home/runner/.cache/sccache
+      RUSTFLAGS: "-Clinker=gcc -Clink-arg=-fuse-ld=mold"
       # SCCACHE_RECACHE: 1 # Uncomment this to clear cache, then comment
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           lfs: true
           path: md2html
-      - name: Setup variables
-        id: variables
-        run: |
-           VER=${GITHUB_REF##*/}
-           VER=${VER#commit-}
-           VER=${VER%-release}
-           echo "version=${VER}" >> $GITHUB_OUTPUT
       - name: clone pulldown-cmark
         run: |
           git clone --depth 1 https://github.com/pulldown-cmark/pulldown-cmark.git
           cd pulldown-cmark
           git fetch --prune --unshallow --tags --no-recurse-submodules --filter=tree:0
+
       - name: checkout tag
         run: |
           TAG=${GITHUB_REF##*/}
+          TAG=${TAG#commit-}
+          TAG=${TAG%-release}
           cd pulldown-cmark
-          COMMIT=$(git log -1 ${TAG#commit-} --pretty=%h)
+          COMMIT=$(git log -1 ${TAG} --pretty=%h)
           if [[ "$TAG" =~ ^commit- ]]; then
             cd ../md2html
             echo $TAG
@@ -65,6 +93,7 @@ jobs:
           cd ../md2html
           echo $TAG | sed -e 's/-g.*$//g' -e 's/-/+/g' > version.txt
           cat version.txt
+
       - name: Generate release tag
         id: release_tag
         run: |
@@ -74,62 +103,66 @@ jobs:
         run: |
           {
           echo "release_note<<EOF"
-          echo "$(cd pulldown-cmark && git log --pretty=format:"%C(yellow)commit %H%C(auto)%d%nAuthor: %an%nDate:   %ad%n%n%s%n%n%b" -1 ${{ steps.variables.outputs.version }})"
+          echo "$(cd pulldown-cmark && git log --pretty=format:"%C(yellow)commit %H%C(auto)%d%nAuthor: %an%nDate:   %ad%n%n%s%n%n%b" -1 ${{ steps.release_tag.outputs.release_tag }})"
           echo "EOF"
           } >> $GITHUB_OUTPUT
       - name: test
         run: |
           echo "1: ${{ steps.release_tag.outputs.release_tag }}"
           echo "2: ${{ steps.release_note.outputs.release_note }}"
-      - name: install zig and tools (Linux)
-        run: |
-          #pacman -Sy sudo rustup clang llvm lld make git --noconfirm
-          sudo apt-get install build-essential make git clang binutils-mingw-w64 wget
-          rm -f ~/.cargo/config*
-          mkdir -p zig
-          curl -LZ https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz|tar xJ --strip-component=1 -C zig
-          sudo mv zig /usr/local/
-          echo "/usr/local/zig" >> $GITHUB_PATH
+
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.4
         with:
-          version: "v0.7.7"
+          version: "v0.8.0"
+
       - name: Install mold linker
-        uses: rui314/setup-mold@staging
+        uses: rui314/setup-mold@v1
         with:
-          mold-version: 2.30.0
+          mold-version: 2.31.0
           make-default: true
-      - name: Cache toolchain
-        uses: Swatinem/rust-cache@v2
-      - name: Update toolchain
-        run: |
-          rm -f ~/.cargo/bin/rust-analyzer
-          rm -f ~/.cargo/bin/rustfmt
-          rm -f ~/.cargo/bin/cargo-fmt
-          rustup update nightly
-          rustup default nightly
-          rustup component add rust-src
-          rustup target add $(cat md2html/target.txt)
-          rustup +stable target add $(cat md2html/target.txt)
-      - name: Install cargo-zigbuild
-        run: |
-          cargo install cargo-zigbuild --target x86_64-unknown-linux-gnu
-      - name: config.toml
-        run: |
-          mkdir -p ~/.cargo/
-          rm -f ~/.cargo/config*
-          cp md2html/config.toml ~/.cargo/config.toml
-      - name: Build and archive
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Cross build with all features
+        uses: actions-rs/cargo@v1
+        with:
+          working-directory: md2html
+          use-cross: true
+          command: build
+          args: --release --target ${{ matrix.target }} --all-features --manifest-path md2html/Cargo.toml
+
+      - name: Build archive
         shell: bash
         run: |
-          cd md2html
-          make target-archive
-      - name: Create release
-        uses: ncipollo/release-action@v1
+          # Replace with the name of your binary
+          binary_name="md2html"
+
+          dirname="$binary_name-${{ steps.release_tag.outputs.release_tag }}-${{ matrix.target }}"
+          mkdir "$dirname"
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            mv "target/${{ matrix.target }}/release/$binary_name.exe" "$dirname"
+          else
+            mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+          fi
+
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            7z a ../"$dirname.zip" "$dirname"
+            7z l ../"$dirname.zip"
+            echo "ASSET=$dirname.zip" >> $GITHUB_ENV
+          else
+            tar -czf ../"$dirname.tar.gz" "$dirname"
+            tar tvf ../"$dirname.tar.gz"
+            echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+          fi
+
+      - name: Upload binaries to release
+        uses: softprops/action-gh-release@v1
         with:
-          tag: "${{ steps.release_tag.outputs.release_tag }}"
-          name: "${{ steps.release_tag.outputs.release_tag }}"
-          artifacts: 'md2html/release/*'
-          token: ${{ secrets.GITHUB_TOKEN }}
-          body: "${{ steps.release_note.outputs.release_note }}"
+          files: |
+            ${{ env.ASSET }}
 
