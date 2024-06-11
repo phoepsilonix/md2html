@@ -35,7 +35,9 @@ jobs:
           git fetch --prune --unshallow --tags --no-recurse-submodules --filter=tree:0
       - name: checkout tag
         run: |
-          TAG=${{ steps.variables.outputs.version }}
+          TAG=${GITHUB_REF##*/}
+          TAG=${TAG%-release}
+          echo $TAG
           cd pulldown-cmark
           COMMIT=$(git log -1 ${TAG#commit-} --pretty=%h)
           if [[ "$TAG" =~ ^commit- ]]; then
@@ -64,10 +66,13 @@ jobs:
           fi
           cd ../md2html
           echo $TAG | sed -e 's/-g.*$//g' -e 's/-/+/g' > version.txt
+          echo $TAG > version2.txt
           cat version.txt
+          cat version2.txt
       - name: Generate release tag
         id: release_tag
         run: |
+          cat md2html/version.txt
           echo "release_tag=$(cat md2html/version.txt)" >> $GITHUB_OUTPUT
       - name: Generate release note
         id: release_note
