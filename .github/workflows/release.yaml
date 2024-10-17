@@ -73,8 +73,12 @@ jobs:
       - name: Generate release tag
         id: release_tag
         run: |
-          cat md2html/version.txt
-          echo "release_tag=$(cat md2html/version.txt)" >> $GITHUB_OUTPUT
+          tag=$(cat md2html/version.txt)
+          base_tag=${tag%+*}
+          echo $tag
+          echo $base_tag
+          echo "release_tag=${tag}" >> $GITHUB_OUTPUT
+          echo "base_tag=${base_tag}" >> $GITHUB_OUTPUT
       - name: Generate release note
         id: release_note
         run: |
@@ -86,7 +90,16 @@ jobs:
       - name: test
         run: |
           echo "1: ${{ steps.release_tag.outputs.release_tag }}"
+          echo "1: ${{ steps.release_tag.outputs.base_tag }}"
           echo "2: ${{ steps.release_note.outputs.release_note }}"
+      - name: Rust cache rustup
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/.rustup
+            /home/runner/.cargo
+          key: ${{ runner.os }}-pulldown-cmark-${{ steps.release_tag.outputs.base_tag }}
+          restore-keys: ${{ runner.os }}-pulldown-cmark-
       - name: install zig and tools (Linux)
         run: |
           #pacman -Sy sudo rustup clang llvm lld make git --noconfirm
@@ -97,16 +110,14 @@ jobs:
           sudo mv zig /usr/local/
           echo "/usr/local/zig" >> $GITHUB_PATH
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.4
+        uses: mozilla-actions/sccache-action@v0.0.6
         with:
-          version: "v0.8.1"
+          version: "v0.8.2"
       - name: Install mold linker
         uses: rui314/setup-mold@staging
         with:
-          mold-version: 2.32.0
+          mold-version: 2.34.1
           make-default: true
-      - name: Cache toolchain
-        uses: Swatinem/rust-cache@v2
       - name: Update toolchain
         run: |
           rm -f ~/.cargo/bin/rust-analyzer
