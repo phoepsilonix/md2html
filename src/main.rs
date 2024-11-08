@@ -22,16 +22,14 @@
 //! Command line tool to exercise pulldown-cmark.
 
 #![forbid(unsafe_code)]
-
 use pulldown_cmark::{html, Options, Parser, Event, Tag, TagEnd, CodeBlockKind};
-
-use std::env;
+use pico_args::Arguments;
 use std::io::{self, Read};
-//use std::mem;
 use std::fs::File;
 use std::path::PathBuf;
+//use std::mem;
 
-fn dry_run(text: &str, opts: Options) {
+fn perform_dry_run(text: &str, opts: Options) {
     let p = Parser::new_ext(text, opts);
     let count = p.count();
     println!("{} events", count);
@@ -45,100 +43,85 @@ fn print_events(text: &str, opts: Options) {
     println!("EOF");
 }
 
-fn brief(program: &str) -> String {
-    format!(
-        "Usage: {} [options]\n\n{}",
-        program, "Reads markdown from file or standard input and emits HTML.",
-    )
-}
+pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = Arguments::from_env();
 
-pub fn main() -> std::io::Result<()> {
-    let args: Vec<_> = env::args().collect();
-    let mut opts = getopts::Options::new();
-    opts.optflag("h", "help", "this help message");
-    opts.optflag("d", "dry-run", "dry run, produce no output");
-    opts.optflag("e", "events", "print event sequence instead of rendering");
-    opts.optflag("T", "enable-tables", "enable GitHub-style tables");
-    opts.optflag("F", "enable-footnotes", "enable GitHub-style footnotes");
-    opts.optflag("", "enable-old-footnotes", "enable Hoedown-style footnotes");
-    opts.optflag(
-        "S",
-        "enable-strikethrough",
-        "enable GitHub-style strikethrough",
-    );
-    opts.optflag("L", "enable-tasklists", "enable GitHub-style task lists");
-    opts.optflag("P", "enable-smart-punctuation", "enable smart punctuation");
-    opts.optflag(
-        "H",
-        "enable-heading-attributes",
-        "enable heading attributes",
-    );
-    opts.optflag("M", "enable-metadata-blocks", "enable metadata blocks");
-
-    let matches = match opts.parse(&args[1..]) {
-        Ok(m) => m,
-        Err(f) => {
-            eprintln!("{}\n{}", f, opts.usage(&brief(&args[0])));
-            std::process::exit(1);
-        }
-    };
-    if matches.opt_present("help") {
-        println!("{}", opts.usage(&brief(&args[0])));
+    if args.contains(["-h", "--help"]) {
+        println!("Usage: [options] [FILES...]");
+        println!("Options:");
+        println!("  -h, --help                 Print this help message");
+        println!("  -d, --dry-run              Dry run, produce no output");
+        println!("  -e, --events               Print event sequence instead of rendering");
+        println!("  -T, --enable-tables        Enable GitHub-style tables");
+        println!("  -F, --enable-footnotes     Enable GitHub-style footnotes");
+        println!("  --enable-old-footnotes     Enable Hoedown-style footnotes");
+        println!("  -S, --enable-strikethrough Enable GitHub-style strikethrough");
+        println!("  -L, --enable-tasklists     Enable GitHub-style task lists");
+        println!("  -P, --enable-smart-punctuation Enable smart punctuation");
+        println!("  -H, --enable-heading-attributes Enable heading attributes");
+        println!("  -M, --enable-metadata-blocks Enable metadata blocks");
         return Ok(());
     }
+
+    let dry_run = args.contains(["-d", "--dry-run"]);
+    let events = args.contains(["-e", "--events"]);
+
     let mut opts = Options::empty();
-    if matches.opt_present("enable-tables") {
+    if args.contains(["-T", "--enable-tables"]) {
         opts.insert(Options::ENABLE_TABLES);
     }
-    if matches.opt_present("enable-footnotes") {
+    if args.contains(["-F", "--enable-footnotes"]) {
         opts.insert(Options::ENABLE_FOOTNOTES);
     }
-    if matches.opt_present("enable-old-footnotes") {
+    if args.contains("--enable-old-footnotes") {
         opts.insert(Options::ENABLE_OLD_FOOTNOTES);
     }
-    if matches.opt_present("enable-strikethrough") {
+    if args.contains(["-S", "--enable-strikethrough"]) {
         opts.insert(Options::ENABLE_STRIKETHROUGH);
     }
-    if matches.opt_present("enable-tasklists") {
+    if args.contains(["-L", "--enable-tasklists"]) {
         opts.insert(Options::ENABLE_TASKLISTS);
     }
-    if matches.opt_present("enable-smart-punctuation") {
+    if args.contains(["-P", "--enable-smart-punctuation"]) {
         opts.insert(Options::ENABLE_SMART_PUNCTUATION);
     }
-    if matches.opt_present("enable-heading-attributes") {
+    if args.contains(["-H", "--enable-heading-attributes"]) {
         opts.insert(Options::ENABLE_HEADING_ATTRIBUTES);
     }
-    if matches.opt_present("enable-metadata-blocks") {
+    if args.contains(["-M", "--enable-metadata-blocks"]) {
         opts.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
         opts.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
     }
 
+    // free() を使用して残りの引数を取得し、String に変換
+    let mut files = Vec::new();
+    while let Ok(file) = args.free_from_str::<String>() {
+        files.push(file);
+    }
+
     let mut input = String::new();
-    if !&matches.free.is_empty() {
-        for filename in &matches.free {
+    if !files.is_empty() {
+        for filename in files {
             let real_path = PathBuf::from(filename);
-            let mut f = File::open(&real_path).expect("file not found");
-            f.read_to_string(&mut input)
-                .expect("something went wrong reading the file");
-            if matches.opt_present("events") {
-                print_events(&input, opts);
-            } else if matches.opt_present("dry-run") {
-                dry_run(&input, opts);
-            } else {
-                pulldown_cmark(&input, opts);
-            }
+            let mut f = File::open(&real_path)?;
+            f.read_to_string(&mut input)?;
+            process_input(&input, dry_run, events, opts);
         }
     } else {
-        let _ = io::stdin().lock().read_to_string(&mut input);
-        if matches.opt_present("events") {
-            print_events(&input, opts);
-        } else if matches.opt_present("dry-run") {
-            dry_run(&input, opts);
-        } else {
-            pulldown_cmark(&input, opts);
-        }
+        io::stdin().lock().read_to_string(&mut input)?;
+        process_input(&input, dry_run, events, opts);
     }
     Ok(())
+}
+
+fn process_input(input: &str, dry_run: bool, events: bool, opts: Options) {
+    if events {
+        print_events(input, opts);
+    } else if dry_run {
+        perform_dry_run(input, opts);
+    } else {
+        pulldown_cmark(input, opts);
+    }
 }
 
 pub fn pulldown_cmark(input: &str, opts: Options) {
@@ -180,11 +163,11 @@ pub fn pulldown_cmark(input: &str, opts: Options) {
     let mut buffer = String::new();
     html::push_html(&mut buffer, &mut p.into_iter());
     print!("{}", buffer);
-    /*
-       let stdio = io::stdout();
-       let buffer = std::io::BufWriter::with_capacity(1024 * 1024, stdio.lock());
-       let _ = html::write_html(buffer, &mut p);
-       */
+
+    //let stdout = std::io::stdout();
+    //let handle = stdout.lock();
+    //let _ = html::write_html_io(handle, &mut p.clone().into_iter());
+
     // Since the program will now terminate and the memory will be returned
     // to the operating system anyway, there is no point in tidely cleaning
     // up all the datastructures we have used. We shouldn't do this if we'd
