@@ -41,7 +41,6 @@ jobs:
             artifact_name: md2html-aarch64-apple-darwin.tar.xz
             asset_name: md2html-aarch64-x86_64-apple-darwin
 
-
     runs-on: ${{ matrix.os }}
     env:
       SCCACHE_CACHE_SIZE: 1G
