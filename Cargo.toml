@@ -10,3 +10,13 @@ license = "MIT"
 gh-emoji = "1.0.8"
 pico-args = { version = "0.5.0", features = ["combined-flags"] }
 pulldown-cmark = { git = "https://github.com/raphlinus/pulldown-cmark.git", branch = "master", default-features = false, features = ["html", "pulldown-cmark-escape"] }
+
+[profile.release]
+#strip = "symbols"
+opt-level = "z"  # Optimize for size.
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+debug-assertions = false
+overflow-checks = false

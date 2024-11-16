@@ -9,13 +9,47 @@ on:
 jobs:
   release:
     name: Release
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: md2html-x86_64-linux.tar.xz
+            asset_name: md2html-x86_64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact_name: md2html-aarch64-linux.tar.xz
+            asset_name: md2html-aarch64-unknown-linux-musl
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: md2html-x86_64-linux.tar.xz
+            asset_name: md2html-x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: md2html-aarch64-linux.tar.xz
+            asset_name: md2html-aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            artifact_name: md2html-x86_64-pc-windows-gnu.zip
+            asset_name: md2html-x86_64-pc-windows-gnu
+          - os: ubuntu-latest
+            target: x86_64-apple-darwin
+            artifact_name: md2html-x86_64-x86_64-apple-darwin.tar.xz
+            asset_name: md2html-x86_64-x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: aarch64-apple-darwin
+            artifact_name: md2html-aarch64-apple-darwin.tar.xz
+            asset_name: md2html-aarch64-x86_64-apple-darwin
+
+
+    runs-on: ${{ matrix.os }}
     env:
       SCCACHE_CACHE_SIZE: 1G
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
       SCCACHE_DIR: /home/runner/.cache/sccache
       # SCCACHE_RECACHE: 1 # Uncomment this to clear cache, then comment
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,8 +78,8 @@ jobs:
           if [[ "$TAG" =~ ^commit- ]]; then
             cd ../md2html
             echo $TAG
-            git tag $TAG -d
-            git push origin $TAG -d
+            git tag $TAG -d || true
+            git push origin $TAG -d || true
             cd ../pulldown-cmark
             base_tag=$(git describe --tags --abbrev=0 --always ${COMMIT})
             echo $base_tag
@@ -92,61 +126,130 @@ jobs:
           echo "1: ${{ steps.release_tag.outputs.release_tag }}"
           echo "1: ${{ steps.release_tag.outputs.base_tag }}"
           echo "2: ${{ steps.release_note.outputs.release_note }}"
+
+      - name: rustup cache
+        run: |
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          mkdir -p /home/runner/.rustup
+          mkdir -p /home/runner/.cargo
+          mkdir -p /home/runner/.cache
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.4
+        with:
+          version: "v0.8.2"
+
       - name: Rust cache rustup
         uses: actions/cache@v4
         with:
           path: |
             /home/runner/.rustup
             /home/runner/.cargo
-          key: ${{ runner.os }}-pulldown-cmark-${{ steps.release_tag.outputs.base_tag }}
-          restore-keys: ${{ runner.os }}-pulldown-cmark-
-      - name: install zig and tools (Linux)
+            /home/runner/.cache
+          key: ${{ matrix.target }}-pulldown-cmark-${{ steps.release_tag.outputs.base_tag }}
+          restore-keys: ${{ matrix.target }}-pulldown-cmark-
+
+      - name: Install stable toolchain
+        shell: bash
         run: |
-          #pacman -Sy sudo rustup clang llvm lld make git --noconfirm
-          sudo apt-get install build-essential make git clang binutils-mingw-w64 wget
-          rm -f ~/.cargo/config*
-          mkdir -p zig
-          curl -LZ https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz|tar xJ --strip-component=1 -C zig
-          sudo mv zig /usr/local/
-          echo "/usr/local/zig" >> $GITHUB_PATH
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.6
-        with:
-          version: "v0.8.2"
-      - name: Install mold linker
-        uses: rui314/setup-mold@staging
-        with:
-          mold-version: 2.34.1
-          make-default: true
-      - name: Update toolchain
-        run: |
-          rm -f ~/.cargo/bin/rust-analyzer
-          rm -f ~/.cargo/bin/rustfmt
-          rm -f ~/.cargo/bin/cargo-fmt
-          rustup update nightly
-          rustup default nightly
-          rustup component add rust-src
-          rustup target add $(cat md2html/target.txt)
-          rustup +stable target add $(cat md2html/target.txt)
-      - name: Install cargo-zigbuild
-        run: |
-          cargo install cargo-zigbuild --target x86_64-unknown-linux-gnu
-      - name: config.toml
-        run: |
-          mkdir -p ~/.cargo/
-          rm -f ~/.cargo/config*
-          cp md2html/config.toml ~/.cargo/config.toml
-      - name: Build and archive
+          export PATH="~/.cargo/bin:$PATH"
+          which rustup || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "Running Rust program for ${{ matrix.os }}"
+          curl -Lo mold.tar.gz https://github.com/rui314/mold/releases/download/v2.34.1/mold-2.34.1-x86_64-linux.tar.gz
+          sudo tar -xf mold.tar.gz --strip-component=1 -C /usr/local/
+
+          # Add Rust target
+          rustup update
+          #rustup override set nightly
+          rustup target add ${{ matrix.target }}
+          if [[ ${{ matrix.target }} =~ linux ]];then
+            rustup component add rust-src
+            #rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
+            #mkdir -p zig
+            #curl -LZ \
+            #  https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz \
+            #  |tar xJ --strip-component=1 -C zig
+            #sudo mv zig /usr/local/
+            #echo "/usr/local/zig" >> $GITHUB_PATH
+          fi
+
+      - name: Cross build with all features
         shell: bash
         run: |
           cd md2html
-          make target-archive
-      - name: Create release
-        uses: ncipollo/release-action@v1
-        with:
-          tag: "${{ steps.release_tag.outputs.release_tag }}"
-          name: "${{ steps.release_tag.outputs.release_tag }}"
-          artifacts: 'md2html/release/*'
-          token: ${{ secrets.GITHUB_TOKEN }}
-          body: "${{ steps.release_note.outputs.release_note }}"
+          which rustc
+          source $HOME/.cargo/env || PATH=$HOME/.cargo/bin:$PATH
+          which rustc
+          rm $HOME/.cargo/config* -f
+          rm $HOME/.cargo/Cross.toml -f
+          if [[ ${{ matrix.target }} =~ apple ]];then
+            docker run \
+              --volume "${PWD}":/root/src \
+              --workdir /root/src \
+              --name rust-builder \
+              -d joseluisq/rust-linux-darwin-builder:1.82.0 \
+              sleep infinity
+            docker exec rust-builder rm /root/.cargo/config -f
+            docker cp config.toml rust-builder:/root/.cargo/config.toml
+            #docker exec rust-builder rustup toolchain install nightly-x86_64-unknown-linux-gnu
+            #docker exec rust-builder rustup component add rust-src
+            #docker exec rust-builder rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
+            docker exec rust-builder sh -c "cargo build --release --target ${{ matrix.target }}"
+              #sh -c "rustup run nightly cargo build --release --target ${{ matrix.target }} || cargo build --release --target ${{ matrix.target }}"
+            docker exec rust-builder ${{ matrix.target }}22.4-strip -v target/${{ matrix.target }}/release/md2html
+            docker stop rust-builder
+            docker rm rust-builder
+            sudo chown $USER:$USER -R ${PWD}/*
+          elif [[ ${{ matrix.target }} =~ linux ]];then
+            cargo install cross
+            cargo install cargo-zigbuild
+            cp config.toml $HOME/.cargo/ -f
+            cp Cross.toml $HOME/.cargo/ -f
+            #rustup run nightly cross build --release --target ${{ matrix.target }} --all-features --verbose --manifest-path ./Cargo.toml || \
+            cross build --release --target ${{ matrix.target }} --all-features --verbose --manifest-path ./Cargo.toml
+          #  cp config.toml $HOME/.cargo/ -f
+          #  cargo install cross
+          #  cargo install cargo-zigbuild
+          #cargo +nightly zigbuild --release --target ${{ matrix.target }} --all-features --verbose --manifest-path ./Cargo.toml || \
+          #  cargo +stable zigbuild --release --target ${{ matrix.target }} --all-features --verbose --manifest-path ./Cargo.toml
+          else
+            cargo install cross
+            cargo install cargo-zigbuild
+            cp config.toml $HOME/.cargo/ -f
+            cp Cross.toml $HOME/.cargo/ -f
+            #rustup run nightly cross build --release --target ${{ matrix.target }} --all-features --verbose --manifest-path ./Cargo.toml || \
+            cross build --release --target ${{ matrix.target }} --all-features --verbose --manifest-path ./Cargo.toml
+          fi
 
+      - name: Build archive
+        shell: bash
+        run: |
+          cd md2html
+          binary_name="md2html"
+
+          dirname="$binary_name-${{ matrix.target }}"
+          mkdir "$dirname"
+          if [ "${{ matrix.target }}" == "x86_64-pc-windows-gnu" ]; then
+            mv "target/${{ matrix.target }}/release/$binary_name.exe" "$dirname"
+          else
+            mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+          fi
+
+          if [ "${{ matrix.target }}" == "x86_64-pc-windows-gnu" ]; then
+            7z a ../"$dirname.zip" "$dirname"
+            7z l ../"$dirname.zip"
+            echo "ASSET=$dirname.zip" >> $GITHUB_ENV
+          else
+            tar -czf ../"$dirname.tar.gz" "$dirname"
+            tar tvf ../"$dirname.tar.gz"
+            echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+          fi
+
+      - name: Upload binaries to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ steps.release_tag.outputs.release_tag }}"
+          name: "${{ steps.release_tag.outputs.release_tag }}"
+          body: "${{ steps.release_note.outputs.release_note }}"
+          files: |
+            ${{ env.ASSET }}
