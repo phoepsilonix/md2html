@@ -32,6 +32,12 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+#[cfg(all(
+        feature = "use-mimalloc-rs",
+))]
+#[global_allocator]
+static GLOBAL_MIMALLOC: mimalloc_rust::GlobalMiMalloc = mimalloc_rust::GlobalMiMalloc;
+
 use pulldown_cmark::{html, Options, Parser, Event, Tag, TagEnd, CodeBlockKind};
 use pico_args::Arguments;
 use std::io::{self, Read};

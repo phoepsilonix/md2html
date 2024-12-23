@@ -12,9 +12,13 @@ repository = "https://github.com/phoepsilonix/md2html"
 
 [dependencies]
 gh-emoji = "1.0.8"
-mimalloc = { version = "0.1.43", optional = true }
+mimalloc-rust = { version = "0.2.1", optional = true }
 pico-args = { version = "0.5.0", features = ["combined-flags"] }
 pulldown-cmark = { git = "https://github.com/raphlinus/pulldown-cmark.git", branch = "master", default-features = false, features = ["html", "pulldown-cmark-escape"] }
+
+[target.'cfg(any(not(any(target_arch = "arm", target_arch = "aarch64")),all(target_arch = "aarch64", not(target_os = "windows"))))'.dependencies]
+mimalloc = { version = "0.1.43", optional = true }
+
 
 [profile.release]
 debug = true
@@ -30,6 +34,7 @@ inherits = "release"
 lto = "fat"
 
 [features]
+use-mimalloc-rs = ["dep:mimalloc-rust"]
 use-mimalloc = ["dep:mimalloc"]
 default = []
 
