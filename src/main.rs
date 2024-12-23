@@ -22,6 +22,16 @@
 //! Command line tool to exercise pulldown-cmark.
 
 #![forbid(unsafe_code)]
+#[cfg(all(
+        feature = "use-mimalloc",
+        any(
+            not(any(target_arch = "arm", target_arch = "aarch64")),
+            all(target_arch = "aarch64", not(target_os = "windows"))
+        )
+))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use pulldown_cmark::{html, Options, Parser, Event, Tag, TagEnd, CodeBlockKind};
 use pico_args::Arguments;
 use std::io::{self, Read};
@@ -152,7 +162,7 @@ pub fn pulldown_cmark(input: &str, opts: Options) {
                 let html = code;
                 p.push(Event::Html(
                         format!("<pre><code class=\"language-{}\">{}</code></pre>", lang, html).into(),
-                        ));
+                ));
                 code = String::new();
             }
             _ => {
